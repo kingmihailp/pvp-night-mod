@@ -7,7 +7,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.neoforge.event.entity.living.LivingAttackEvent;
+import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
@@ -15,7 +15,7 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
  * Handles all game events for the PvP Night mod:
  *
  *  - {@link LevelTickEvent.Post} — checks whether a PvP day has started or ended.
- *  - {@link LivingAttackEvent}   — cancels player-vs-player damage outside PvP days.
+ *  - {@link LivingIncomingDamageEvent} — cancels player-vs-player damage outside PvP days.
  *  - {@link PlayerEvent.PlayerLoggedInEvent} — informs joining players of the PvP state.
  */
 public class PvpEventHandler {
@@ -64,7 +64,7 @@ public class PvpEventHandler {
     // ------------------------------------------------------------------
 
     @SubscribeEvent
-    public void onLivingAttack(LivingAttackEvent event) {
+    public void onLivingAttack(LivingIncomingDamageEvent event) {
         // We only care about player-vs-player damage
         if (!(event.getEntity() instanceof ServerPlayer victim)) return;
         if (!(event.getSource().getEntity() instanceof ServerPlayer attacker)) return;
