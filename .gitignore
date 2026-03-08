@@ -1,0 +1,24 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# NeoForge / ForgeGradle caches
+run/
+forge-*.jar
+
+# OS
+.DS_Store
+Thumbs.db
