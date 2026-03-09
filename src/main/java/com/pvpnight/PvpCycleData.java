@@ -9,9 +9,9 @@ import net.minecraft.world.level.saveddata.SavedData;
  * Persistent data for the PvP cycle.
  *
  * Cycle logic:
- *   - CYCLE_LENGTH = 7 in-game days
- *   - The 7th day of each cycle (index 6) is the PvP day
- *   - After PvP day ends, the next cycle starts immediately
+ *   - By default: 6 non-PvP days + 1 PvP day = 7-day cycle.
+ *   - /setpvpdelay N changes the delay to N days for ALL future cycles.
+ *   - After each PvP day the next cycle begins immediately using the saved delay.
  *
  * Data is saved to world/data/pvpnight_cycle.dat and survives server restarts.
  */
@@ -19,17 +19,20 @@ public class PvpCycleData extends SavedData {
 
     public static final String DATA_NAME = "pvpnight_cycle";
 
-    /** Number of in-game days in one full cycle (including the PvP day). */
-    public static final int CYCLE_LENGTH = 7;
+    /** Default number of non-PvP days before each PvP day. */
+    public static final int DEFAULT_DELAY = 6;
 
-    /**
-     * The first game-day of the current cycle.
-     * PvP is active on day (cycleStartDay + CYCLE_LENGTH - 1).
-     */
+    /** First game-day of the current cycle. PvP starts on (cycleStartDay + customDelay). */
     private long cycleStartDay;
 
-    /** Whether PvP is currently active (i.e., we are on the PvP day). */
+    /** Whether PvP is currently active. */
     private boolean pvpActive;
+
+    /**
+     * How many non-PvP days precede each PvP day.
+     * Saved so that /setpvpdelay affects all future cycles, not just the current one.
+     */
+    private long customDelay;
 
     // -------------------------------------------------
     // Construction
@@ -38,6 +41,7 @@ public class PvpCycleData extends SavedData {
     public PvpCycleData() {
         this.cycleStartDay = 0;
         this.pvpActive = false;
+        this.customDelay = DEFAULT_DELAY;
     }
 
     // -------------------------------------------------
@@ -48,6 +52,8 @@ public class PvpCycleData extends SavedData {
         PvpCycleData data = new PvpCycleData();
         data.cycleStartDay = tag.getLong("cycleStartDay");
         data.pvpActive = tag.getBoolean("pvpActive");
+        // Fall back to DEFAULT_DELAY for worlds created before this field existed
+        data.customDelay = tag.contains("customDelay") ? tag.getLong("customDelay") : DEFAULT_DELAY;
         return data;
     }
 
@@ -55,6 +61,7 @@ public class PvpCycleData extends SavedData {
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider lookupProvider) {
         tag.putLong("cycleStartDay", cycleStartDay);
         tag.putBoolean("pvpActive", pvpActive);
+        tag.putLong("customDelay", customDelay);
         return tag;
     }
 
@@ -73,22 +80,22 @@ public class PvpCycleData extends SavedData {
     // Getters
     // -------------------------------------------------
 
-    public long getCycleStartDay() {
-        return cycleStartDay;
-    }
-
-    /** Day on which PvP becomes active (0-indexed, inclusive). */
+    /** Day on which PvP becomes active (inclusive). */
     public long getPvpDay() {
-        return cycleStartDay + CYCLE_LENGTH - 1;
+        return cycleStartDay + customDelay;
     }
 
     /** Day on which the current PvP period ends (exclusive). */
     public long getPvpEndDay() {
-        return cycleStartDay + CYCLE_LENGTH;
+        return cycleStartDay + customDelay + 1;
     }
 
     public boolean isPvpActive() {
         return pvpActive;
+    }
+
+    public long getCustomDelay() {
+        return customDelay;
     }
 
     /**
@@ -97,8 +104,7 @@ public class PvpCycleData extends SavedData {
      */
     public long daysUntilPvp(long currentDay) {
         if (pvpActive) return 0;
-        long pvpDay = getPvpDay();
-        return Math.max(0, pvpDay - currentDay);
+        return Math.max(0, getPvpDay() - currentDay);
     }
 
     // -------------------------------------------------
@@ -111,29 +117,27 @@ public class PvpCycleData extends SavedData {
     }
 
     /**
-     * Deactivate PvP and start the next 7-day cycle beginning at {@code currentDay}.
+     * Deactivate PvP and start the next cycle from {@code currentDay}.
+     * Uses the saved {@code customDelay}, so the interval set by /setpvpdelay persists.
      */
     public void endPvpAndStartNewCycle(long currentDay) {
         this.pvpActive = false;
         this.cycleStartDay = currentDay;
+        // customDelay is intentionally NOT reset here — it stays as configured
         setDirty();
     }
 
     /**
-     * Schedule the next PvP day to occur {@code daysFromNow} in-game days from now.
-     * <p>
-     * {@code daysFromNow = 0} activates PvP immediately (the tick handler picks it up
-     * within one second); {@code daysFromNow = 1} means "next in-game day", etc.
+     * Change the delay between PvP days and reschedule accordingly.
+     * The new delay is saved and will be used for ALL future cycles automatically.
      *
      * @param currentDay  current in-game day ({@code level.getDayTime() / 24000})
      * @param daysFromNow days until PvP starts; must be &gt;= 0
      */
     public void setNextPvpInDays(long currentDay, long daysFromNow) {
         this.pvpActive = false;
-        // pvpDay = cycleStartDay + CYCLE_LENGTH - 1
-        // We want pvpDay = currentDay + daysFromNow
-        // => cycleStartDay = currentDay + daysFromNow - CYCLE_LENGTH + 1
-        this.cycleStartDay = currentDay + daysFromNow - CYCLE_LENGTH + 1;
+        this.customDelay = daysFromNow;   // saved — used by endPvpAndStartNewCycle too
+        this.cycleStartDay = currentDay;   // pvpDay = currentDay + customDelay
         setDirty();
     }
 }
