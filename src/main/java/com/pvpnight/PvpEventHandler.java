@@ -1,12 +1,14 @@
 package com.pvpnight;
 
-import net.minecraft.ChatFormatting;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
@@ -14,9 +16,10 @@ import net.neoforged.neoforge.event.tick.LevelTickEvent;
 /**
  * Handles all game events for the PvP Night mod:
  *
- *  - {@link LevelTickEvent.Post} — checks whether a PvP day has started or ended.
- *  - {@link LivingIncomingDamageEvent} — cancels player-vs-player damage outside PvP days.
- *  - {@link PlayerEvent.PlayerLoggedInEvent} — informs joining players of the PvP state.
+ *  - {@link LevelTickEvent.Post}             — drives the PvP day cycle.
+ *  - {@link LivingIncomingDamageEvent}       — blocks PvP damage outside PvP days.
+ *  - {@link PlayerEvent.PlayerLoggedInEvent} — informs joining players of the state.
+ *  - {@link RegisterCommandsEvent}           — registers /setpvpdelay.
  */
 public class PvpEventHandler {
 
@@ -30,8 +33,6 @@ public class PvpEventHandler {
     @SubscribeEvent
     public void onLevelTick(LevelTickEvent.Post event) {
         Level level = event.getLevel();
-
-        // Only run in the Overworld on the server side
         if (level.isClientSide()) return;
         if (!(level instanceof ServerLevel serverLevel)) return;
         if (!serverLevel.dimension().equals(Level.OVERWORLD)) return;
@@ -43,18 +44,19 @@ public class PvpEventHandler {
         PvpCycleData data = PvpCycleData.get(serverLevel);
 
         if (!data.isPvpActive()) {
-            // Check if the PvP day has arrived
             if (currentDay >= data.getPvpDay()) {
                 data.activatePvp();
                 PvpNightMod.LOGGER.info("PvP day started! Current day: {}", currentDay);
-                broadcastPvpStart(server, data, currentDay);
+                server.getPlayerList().broadcastSystemMessage(
+                        PvpMessageFormatter.parse(PvpNightConfig.MSG_PVP_START.get()), false);
             }
         } else {
-            // Check if the PvP day has ended
             if (currentDay >= data.getPvpEndDay()) {
                 data.endPvpAndStartNewCycle(currentDay);
                 PvpNightMod.LOGGER.info("PvP day ended. Next cycle starts at day {}", currentDay);
-                broadcastPvpEnd(server, data, currentDay);
+                long daysUntilNext = data.daysUntilPvp(currentDay);
+                server.getPlayerList().broadcastSystemMessage(
+                        PvpMessageFormatter.parse(PvpNightConfig.MSG_PVP_END.get(), daysUntilNext), false);
             }
         }
     }
@@ -65,7 +67,6 @@ public class PvpEventHandler {
 
     @SubscribeEvent
     public void onLivingAttack(LivingIncomingDamageEvent event) {
-        // We only care about player-vs-player damage
         if (!(event.getEntity() instanceof ServerPlayer victim)) return;
         if (!(event.getSource().getEntity() instanceof ServerPlayer attacker)) return;
 
@@ -74,18 +75,10 @@ public class PvpEventHandler {
 
         if (!data.isPvpActive()) {
             event.setCanceled(true);
-
             long days = data.daysUntilPvp(level.getDayTime() / 24000L);
-            String daysText = days == 1 ? "1 день" : (days + " дней");
-
-            // Show message in the action bar (above hotbar) so it's not spammy
             attacker.displayClientMessage(
-                    Component.literal("\u26d4 PvP отключён! Следующий день PvP через ")
-                            .withStyle(ChatFormatting.RED)
-                            .append(Component.literal(daysText).withStyle(ChatFormatting.YELLOW))
-                            .append(Component.literal(".").withStyle(ChatFormatting.RED)),
-                    true // action bar
-            );
+                    PvpMessageFormatter.parse(PvpNightConfig.MSG_PVP_BLOCKED.get(), days),
+                    true /* action bar */);
         }
     }
 
@@ -100,65 +93,44 @@ public class PvpEventHandler {
         ServerLevel overworld = player.getServer().overworld();
         PvpCycleData data = PvpCycleData.get(overworld);
 
+        Component msg;
         if (data.isPvpActive()) {
-            player.sendSystemMessage(
-                    Component.literal("[PvP Night] ")
-                            .withStyle(ChatFormatting.RED)
-                            .append(Component.literal("Сегодня день PvP! Осторожно!")
-                                    .withStyle(ChatFormatting.YELLOW))
-            );
+            msg = PvpMessageFormatter.parse(PvpNightConfig.MSG_LOGIN_PVP_ACTIVE.get());
         } else {
             long days = data.daysUntilPvp(overworld.getDayTime() / 24000L);
-            String daysText = formatDays(days);
-            player.sendSystemMessage(
-                    Component.literal("[PvP Night] ")
-                            .withStyle(ChatFormatting.GREEN)
-                            .append(Component.literal("PvP отключён. Следующий день PvP через ")
-                                    .withStyle(ChatFormatting.GRAY))
-                            .append(Component.literal(daysText).withStyle(ChatFormatting.YELLOW))
-                            .append(Component.literal(".").withStyle(ChatFormatting.GRAY))
-            );
+            msg = PvpMessageFormatter.parse(PvpNightConfig.MSG_LOGIN_PVP_INACTIVE.get(), days);
         }
+        player.sendSystemMessage(msg);
     }
 
     // ------------------------------------------------------------------
-    // Broadcast helpers
+    // Command — /setpvpdelay <days>
     // ------------------------------------------------------------------
 
-    private static void broadcastPvpStart(MinecraftServer server, PvpCycleData data, long currentDay) {
-        server.getPlayerList().broadcastSystemMessage(
-                Component.literal("\u2694 [PvP Night] ")
-                        .withStyle(ChatFormatting.RED)
-                        .append(Component.literal("ДЕНЬ PVP НАЧАЛСЯ! Сражайтесь! Осталось до конца: 1 день.")
-                                .withStyle(ChatFormatting.YELLOW)),
-                false
+    @SubscribeEvent
+    public void onRegisterCommands(RegisterCommandsEvent event) {
+        event.getDispatcher().register(
+                Commands.literal("setpvpdelay")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.argument("days", IntegerArgumentType.integer(0))
+                                .executes(context -> {
+                                    int days = IntegerArgumentType.getInteger(context, "days");
+                                    MinecraftServer server = context.getSource().getServer();
+                                    ServerLevel overworld = server.overworld();
+                                    long currentDay = overworld.getDayTime() / 24000L;
+
+                                    PvpCycleData data = PvpCycleData.get(overworld);
+                                    data.setNextPvpInDays(currentDay, days);
+
+                                    PvpNightMod.LOGGER.info("PvP delay set to {} days by {}",
+                                            days, context.getSource().getTextName());
+
+                                    context.getSource().sendSuccess(
+                                            () -> PvpMessageFormatter.parse(
+                                                    PvpNightConfig.MSG_SET_DELAY_SUCCESS.get(), days),
+                                            true);
+                                    return days;
+                                }))
         );
-    }
-
-    private static void broadcastPvpEnd(MinecraftServer server, PvpCycleData data, long currentDay) {
-        long daysUntilNext = data.daysUntilPvp(currentDay);
-        String daysText = formatDays(daysUntilNext);
-        server.getPlayerList().broadcastSystemMessage(
-                Component.literal("\u2705 [PvP Night] ")
-                        .withStyle(ChatFormatting.GREEN)
-                        .append(Component.literal("День PvP закончился. Следующий через ")
-                                .withStyle(ChatFormatting.GRAY))
-                        .append(Component.literal(daysText).withStyle(ChatFormatting.YELLOW))
-                        .append(Component.literal(".").withStyle(ChatFormatting.GRAY)),
-                false
-        );
-    }
-
-    // ------------------------------------------------------------------
-    // Utility
-    // ------------------------------------------------------------------
-
-    /**
-     * Returns a Russian-friendly day string: "1 день", "2 дня", "5 дней", etc.
-     */
-    private static String formatDays(long days) {
-        if (days == 1) return "1 день";
-        if (days >= 2 && days <= 4) return days + " дня";
-        return days + " дней";
     }
 }

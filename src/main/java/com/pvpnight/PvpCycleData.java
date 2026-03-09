@@ -118,4 +118,22 @@ public class PvpCycleData extends SavedData {
         this.cycleStartDay = currentDay;
         setDirty();
     }
+
+    /**
+     * Schedule the next PvP day to occur {@code daysFromNow} in-game days from now.
+     * <p>
+     * {@code daysFromNow = 0} activates PvP immediately (the tick handler picks it up
+     * within one second); {@code daysFromNow = 1} means "next in-game day", etc.
+     *
+     * @param currentDay  current in-game day ({@code level.getDayTime() / 24000})
+     * @param daysFromNow days until PvP starts; must be &gt;= 0
+     */
+    public void setNextPvpInDays(long currentDay, long daysFromNow) {
+        this.pvpActive = false;
+        // pvpDay = cycleStartDay + CYCLE_LENGTH - 1
+        // We want pvpDay = currentDay + daysFromNow
+        // => cycleStartDay = currentDay + daysFromNow - CYCLE_LENGTH + 1
+        this.cycleStartDay = currentDay + daysFromNow - CYCLE_LENGTH + 1;
+        setDirty();
+    }
 }
